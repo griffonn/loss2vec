@@ -42,6 +42,8 @@ from six.moves import xrange  # pylint: disable=redefined-builtin
 import numpy as np
 import tensorflow as tf
 
+import losses
+
 word2vec = tf.load_op_library(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'word2vec_ops.so'))
 
 flags = tf.app.flags
@@ -159,6 +161,7 @@ class Word2Vec(object):
   """Word2Vec model (Skipgram)."""
 
   def __init__(self, options, session):
+    self._loss_func = self.dlce_loss
     self._options = options
     self._session = session
     self._word2id = {}
@@ -166,6 +169,25 @@ class Word2Vec(object):
     self.build_graph()
     self.build_eval_graph()
     self.save_vocab()
+
+  def dlce_loss(self, true_logits, sampled_logits):
+    """
+    Build the graph for the dLCE loss.
+    https://arxiv.org/pdf/1605.07766.pdf
+    """
+
+    # cross-entropy(logits, labels)
+    opts = self._options
+    true_xent = tf.nn.sigmoid_cross_entropy_with_logits(
+        labels=tf.ones_like(true_logits), logits=true_logits)
+    sampled_xent = tf.nn.sigmoid_cross_entropy_with_logits(
+        labels=tf.zeros_like(sampled_logits), logits=sampled_logits)
+
+    # NCE-loss is the sum of the true and noise (sampled words)
+    # contributions, averaged over the batch.
+    nce_loss_tensor = (tf.reduce_sum(true_xent) +
+                       tf.reduce_sum(sampled_xent)) / opts.batch_size
+    return nce_loss_tensor
 
   def read_analogies(self):
     """Reads through the analogy question file.
@@ -256,22 +278,6 @@ class Word2Vec(object):
                                sampled_w,
                                transpose_b=True) + sampled_b_vec
     return true_logits, sampled_logits
-
-  def nce_loss(self, true_logits, sampled_logits):
-    """Build the graph for the NCE loss."""
-
-    # cross-entropy(logits, labels)
-    opts = self._options
-    true_xent = tf.nn.sigmoid_cross_entropy_with_logits(
-        labels=tf.ones_like(true_logits), logits=true_logits)
-    sampled_xent = tf.nn.sigmoid_cross_entropy_with_logits(
-        labels=tf.zeros_like(sampled_logits), logits=sampled_logits)
-
-    # NCE-loss is the sum of the true and noise (sampled words)
-    # contributions, averaged over the batch.
-    nce_loss_tensor = (tf.reduce_sum(true_xent) +
-                       tf.reduce_sum(sampled_xent)) / opts.batch_size
-    return nce_loss_tensor
 
   def optimize(self, loss):
     """Build the graph to optimize the loss function."""
@@ -364,7 +370,7 @@ class Word2Vec(object):
     for i, w in enumerate(self._id2word):
       self._word2id[w] = i
     true_logits, sampled_logits = self.forward(examples, labels)
-    loss = self.nce_loss(true_logits, sampled_logits)
+    loss = self._loss_func(true_logits, sampled_logits)
     tf.summary.scalar("NCE loss", loss)
     self._loss = loss
     self.optimize(loss)
