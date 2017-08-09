@@ -394,10 +394,11 @@ class Word2Vec(object):
 
   def build_graph(self):
     """Build the graph for the full model."""
+
     opts = self._options
     # The training data. A text file.
     (words, counts, words_per_epoch, self._epoch, self._words, examples,
-     labels) = word2vec.skipgram_word2vec(filename=opts.train_data,
+     labels, all_examples, all_labels) = word2vec.skipgram_word2vec(filename=opts.train_data,
                                           batch_size=opts.batch_size,
                                           window_size=opts.window_size,
                                           min_count=opts.min_count,
@@ -405,6 +406,10 @@ class Word2Vec(object):
     (opts.vocab_words, opts.vocab_counts,
      opts.words_per_epoch) = self._session.run([words, counts, words_per_epoch])
     opts.vocab_size = len(opts.vocab_words)
+
+    self.all_examples, self.all_labels = self._session.run([all_examples, all_labels])
+    print(self.all_examples.shape, self.all_labels.shape)
+
     print("Data file: ", opts.train_data)
     print("Vocab size: ", opts.vocab_size - 1, " + UNK")
     print("Words per epoch: ", opts.words_per_epoch)
@@ -416,6 +421,8 @@ class Word2Vec(object):
 
     for i, w in enumerate(self._id2word):
       self._word2id[w] = i
+    self.temp_output1 = examples
+    self.temp_output = labels
     true_logits, sampled_logits = self.forward(examples, labels)
     loss = self.nce_loss(true_logits, sampled_logits)
     tf.summary.scalar("NCE loss", loss)
@@ -459,7 +466,7 @@ class Word2Vec(object):
       _, epoch = self._session.run([self._train, self._epoch])
       if not self._printed:
         self._printed = True
-        print(self._session.run([self.temp_output])[0])
+        print(self._session.run([self.temp_output1, self.temp_output]))
       if epoch != initial_epoch:
         break
 

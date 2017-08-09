@@ -34,7 +34,7 @@ def get_ant(words):
     return ants
 
 
-def read_vocab_binary(path):
+def read_vocab(path):
     words = []
     with open(path, 'r') as f:
         for l in f.readlines():
@@ -44,7 +44,7 @@ def read_vocab_binary(path):
 
 if __name__ == '__main__':
     path = sys.argv[-1]
-    words = read_vocab_binary(os.path.join(path, 'vocab.txt'))
+    words = read_vocab(os.path.join(path, 'vocab.txt'))
     with open(os.path.join(path, 'vocab_ant.pickle'), 'wb') as f:
         pickle.dump(get_ant(words), f)
     with open(os.path.join(path, 'vocab_syn.pickle'), 'wb') as f:
