@@ -1,6 +1,3 @@
-# NOTE: batch contains same word multiple times, why is that?
-
-
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -398,7 +395,7 @@ class Word2Vec(object):
     opts = self._options
     # The training data. A text file.
     (words, counts, words_per_epoch, self._epoch, self._words, examples,
-     labels, all_examples, all_labels) = word2vec.skipgram_word2vec(filename=opts.train_data,
+     labels) = word2vec.skipgram_word2vec(filename=opts.train_data,
                                           batch_size=opts.batch_size,
                                           window_size=opts.window_size,
                                           min_count=opts.min_count,
@@ -406,9 +403,6 @@ class Word2Vec(object):
     (opts.vocab_words, opts.vocab_counts,
      opts.words_per_epoch) = self._session.run([words, counts, words_per_epoch])
     opts.vocab_size = len(opts.vocab_words)
-
-    self.all_examples, self.all_labels = self._session.run([all_examples, all_labels])
-    print(self.all_examples.shape, self.all_labels.shape)
 
     print("Data file: ", opts.train_data)
     print("Vocab size: ", opts.vocab_size - 1, " + UNK")
