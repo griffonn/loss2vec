@@ -1,3 +1,6 @@
+# NOTE: batch contains same word multiple times, why is that?
+
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +39,8 @@ import os
 import sys
 import threading
 import time
+import pickle
+from collections import OrderedDict
 
 from six.moves import xrange  # pylint: disable=redefined-builtin
 
@@ -45,6 +50,8 @@ import tensorflow as tf
 word2vec = tf.load_op_library(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'word2vec_ops.so'))
 
 flags = tf.app.flags
+
+flags.DEFINE_string("vocabs_root", "/cs/engproj/3deception/meaning/models_data/text1", "Directory to get vocabulary, synonyms and antonyms from.")
 
 flags.DEFINE_string("save_path", None, "Directory to write the model and "
                     "training summaries.")
@@ -96,10 +103,30 @@ FLAGS = flags.FLAGS
 
 def parse_vocab_to_word_id(vocab_path):
   word_id = {}
-  with open(vocab_path, 'rb') as v:
+  with open(vocab_path, 'r') as v:
     for i, l in enumerate(v.readlines()):
-      word_id[i] = l.split(' ')[0]
+      if i == 0: continue
+      word_id[i] = l.split(' ')[0][2:-1]
   return word_id
+
+
+def word_ids_to_dict(word_id, pickle_path):
+  id_word = {w: i for i, w in word_id.items()}
+
+  word_id_d = {}
+
+  max_length = 0
+  with open(pickle_path, 'rb') as f:
+    syns = pickle.load(f)
+    for w, ss in syns.items():
+      word_id_d[id_word[w]] = list(map(lambda s: id_word[s], ss))
+      if max_length < len(word_id_d[id_word[w]]):
+        max_length = len(word_id_d[id_word[w]])
+
+  for k, v in word_id_d.items():
+    word_id_d[k] += [0] * (max_length - len(v))  # FIXME everyone is a syn/ant of UNK
+
+  return word_id_d
 
 
 class Options(object):
@@ -161,6 +188,8 @@ class Options(object):
     # The text file for eval.
     self.eval_data = FLAGS.eval_data
 
+    self.vocabs_root = FLAGS.vocabs_root
+
 
 class Word2Vec(object):
   """Word2Vec model (Skipgram)."""
@@ -170,6 +199,9 @@ class Word2Vec(object):
     self._session = session
     self._word2id = {}
     self._id2word = []
+    self.word_id = parse_vocab_to_word_id(os.path.join(options.vocabs_root, "vocab.txt"))
+    self.syns = word_ids_to_dict(self.word_id, os.path.join(options.vocabs_root, "vocab_syn.pickle"))
+    self.ants = word_ids_to_dict(self.word_id, os.path.join(options.vocabs_root, "vocab_ant.pickle"))
     self.build_graph()
     self.build_eval_graph()
     self.save_vocab()
@@ -212,6 +244,9 @@ class Word2Vec(object):
         name="emb")
     self._emb = emb
 
+    syn_table = tf.constant(list(OrderedDict(sorted(self.syns.items(), key=lambda t: t[0])).values()))
+    ant_table = tf.constant(list(OrderedDict(sorted(self.ants.items(), key=lambda t: t[0])).values()))
+
     # Softmax weight: [vocab_size, emb_dim]. Transposed.
     sm_w_t = tf.Variable(
         tf.zeros([opts.vocab_size, opts.emb_dim]),
@@ -252,8 +287,32 @@ class Word2Vec(object):
     # Biases for sampled ids: [num_sampled, 1]
     sampled_b = tf.nn.embedding_lookup(sm_b, sampled_ids)
 
+    # TODO:
+    #   get examples_synonyms, examples_antonyms, sampled_synonyms, sampled_antonyms
+    #   extract true_w_syn, true_b_syn, sampled_w_syn, sampled_b_syn
+    #   extract true_w_ant, true_b_ant, sampled_w_ant, sampled_b_ant
+    #   update:
+    examples_syns = tf.gather(syn_table, examples)
+    examples_ants = tf.gather(ant_table, examples)
+
+    # TODO how to get labels of examples_syn/ant?
+
+    # true_w_syn =  = tf.nn.embedding_lookup(sm_w_t, examples_syns_labels)
+    # true_w_ant =  = tf.nn.embedding_lookup(sm_w_t, examples_ants_labels)
+
+    # true_b_syn = tf.nn.embedding_lookup(sm_b, examples_syns)
+    # true_b_ant = tf.nn.embedding_lookup(sm_b, examples_ants)
+
     # True logits: [batch_size, 1]
-    true_logits = tf.reduce_sum(tf.multiply(example_emb, true_w), 1) + true_b
+    true_logits = tf.reduce_sum(tf.multiply(example_emb, true_w), 1) + true_b #\
+      # + tf.reduce_sum(tf.multiply(example_emb, true_w_syn), 1) + true_b_syn \
+      # - tf.reduce_sum(tf.multiply(example_emb, true_w_ant), 1) + true_b_ant
+
+
+    sampled_syns = tf.gather(syn_table, sampled_ids)
+    sampled_ants = tf.gather(ant_table, sampled_ids)
+
+    # TODO same for sampled_logits but I don't know how to do reshape for sampled_b_vec right
 
     # Sampled logits: [batch_size, num_sampled]
     # We replicate sampled noise labels for all examples in the batch
@@ -263,22 +322,6 @@ class Word2Vec(object):
                                sampled_w,
                                transpose_b=True) + sampled_b_vec
     return true_logits, sampled_logits
-
-  def nce_loss(self, true_logits, sampled_logits):
-    """Build the graph for the NCE loss."""
-
-    # cross-entropy(logits, labels)
-    opts = self._options
-    true_xent = tf.nn.sigmoid_cross_entropy_with_logits(
-        labels=tf.ones_like(true_logits), logits=true_logits)
-    sampled_xent = tf.nn.sigmoid_cross_entropy_with_logits(
-        labels=tf.zeros_like(sampled_logits), logits=sampled_logits)
-
-    # NCE-loss is the sum of the true and noise (sampled words)
-    # contributions, averaged over the batch.
-    nce_loss_tensor = (tf.reduce_sum(true_xent) +
-                       tf.reduce_sum(sampled_xent)) / opts.batch_size
-    return nce_loss_tensor
 
   def optimize(self, loss):
     """Build the graph to optimize the loss function."""
@@ -366,8 +409,11 @@ class Word2Vec(object):
     print("Vocab size: ", opts.vocab_size - 1, " + UNK")
     print("Words per epoch: ", opts.words_per_epoch)
     self._examples = examples
+
+
     self._labels = labels
     self._id2word = opts.vocab_words
+
     for i, w in enumerate(self._id2word):
       self._word2id[w] = i
     true_logits, sampled_logits = self.forward(examples, labels)
@@ -390,10 +436,30 @@ class Word2Vec(object):
         f.write("%s %d\n" % (vocab_word,
                              opts.vocab_counts[i]))
 
+  def nce_loss(self, true_logits, sampled_logits):
+    """Build the graph for the NCE loss."""
+
+    # cross-entropy(logits, labels)
+    opts = self._options
+    true_xent = tf.nn.sigmoid_cross_entropy_with_logits(
+        labels=tf.ones_like(true_logits), logits=true_logits)
+    sampled_xent = tf.nn.sigmoid_cross_entropy_with_logits(
+        labels=tf.zeros_like(sampled_logits), logits=sampled_logits)
+
+    # NCE-loss is the sum of the true and noise (sampled words)
+    # contributions, averaged over the batch.
+    nce_loss_tensor = (tf.reduce_sum(true_xent) +
+                       tf.reduce_sum(sampled_xent)) / opts.batch_size
+    return nce_loss_tensor
+
   def _train_thread_body(self):
     initial_epoch, = self._session.run([self._epoch])
+    self._printed = False
     while True:
       _, epoch = self._session.run([self._train, self._epoch])
+      if not self._printed:
+        self._printed = True
+        print(self._session.run([self.temp_output])[0])
       if epoch != initial_epoch:
         break
 
