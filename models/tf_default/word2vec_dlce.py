@@ -126,7 +126,7 @@ def word_dict_to_id_dict(id_word, pickle_path):
   with open(pickle_path, 'rb') as f:
     d = pickle.load(f)
     for w, ss in d.items():
-      id_dict[id_word[w]] = list(map(lambda s: id_word[s], ss))
+      id_dict[word_id[w]] = list(map(lambda s: word_id[s], ss))
 
   return id_dict
 
