@@ -230,6 +230,7 @@ class Word2Vec(object):
 
   def forward(self, examples, labels):
     """Build the graph for the forward pass."""
+
     opts = self._options
 
     # Declare all variables we need.
@@ -241,9 +242,7 @@ class Word2Vec(object):
         name="emb")
     self._emb = emb
 
-    syn_table = tf.constant(list(OrderedDict(sorted(self.syns.items(), key=lambda t: t[0])).values()))
-    ant_table = tf.constant(list(OrderedDict(sorted(self.ants.items(), key=lambda t: t[0])).values()))
-
+    # Initalize weigths and biases for word-context word similarity
     # Softmax weight: [vocab_size, emb_dim]. Transposed.
     sm_w_t = tf.Variable(
         tf.zeros([opts.vocab_size, opts.emb_dim]),
@@ -261,6 +260,8 @@ class Word2Vec(object):
                 dtype=tf.int64),
         [opts.batch_size, 1])
 
+
+
     # Negative sampling.
     sampled_ids, _, _ = (tf.nn.fixed_unigram_candidate_sampler(
         true_classes=labels_matrix,
@@ -274,16 +275,17 @@ class Word2Vec(object):
     # Embeddings for examples: [batch_size, emb_dim]
     example_emb = tf.nn.embedding_lookup(emb, examples)
 
+    #dLCE addition - labels comes as an input
+
+
     # Weights for labels: [batch_size, emb_dim]
     true_w = tf.nn.embedding_lookup(sm_w_t, labels)
     # Biases for labels: [batch_size, 1]
     true_b = tf.nn.embedding_lookup(sm_b, labels)
 
-    # Weights for sampled ids: [num_sampled, emb_dim]
-    sampled_w = tf.nn.embedding_lookup(sm_w_t, sampled_ids)
-    # Biases for sampled ids: [num_sampled, 1]
-    sampled_b = tf.nn.embedding_lookup(sm_b, sampled_ids)
-
+    #=======dLCE Addition======
+    syn_table = tf.constant(list(OrderedDict(sorted(self.syns.items(), key=lambda t: t[0])).values()))
+    ant_table = tf.constant(list(OrderedDict(sorted(self.ants.items(), key=lambda t: t[0])).values()))
     # TODO:
     #   get examples_synonyms, examples_antonyms, sampled_synonyms, sampled_antonyms
     #   extract true_w_syn, true_b_syn, sampled_w_syn, sampled_b_syn
@@ -292,19 +294,29 @@ class Word2Vec(object):
     examples_syns = tf.gather(syn_table, examples)
     examples_ants = tf.gather(ant_table, examples)
 
-    # TODO how to get labels of examples_syn/ant?
+    # TODO Grisha build this func right now
+    examples_syns_labels =
+    examples_ants_labels =
 
-    # true_w_syn =  = tf.nn.embedding_lookup(sm_w_t, examples_syns_labels)
-    # true_w_ant =  = tf.nn.embedding_lookup(sm_w_t, examples_ants_labels)
+    true_w_syn = tf.nn.embedding_lookup(sm_w_t, examples_syns_labels)
+    true_w_ant = tf.nn.embedding_lookup(sm_w_t, examples_ants_labels)
 
-    # true_b_syn = tf.nn.embedding_lookup(sm_b, examples_syns)
-    # true_b_ant = tf.nn.embedding_lookup(sm_b, examples_ants)
+    true_b_syn = tf.nn.embedding_lookup(sm_b, examples_syns)
+    true_b_ant = tf.nn.embedding_lookup(sm_b, examples_ants)
+
+    # Weights for sampled ids: [num_sampled, emb_dim]
+    sampled_w = tf.nn.embedding_lookup(sm_w_t, sampled_ids)
+    # Biases for sampled ids: [num_sampled, 1]
+    sampled_b = tf.nn.embedding_lookup(sm_b, sampled_ids)
+
+
+    # TODO: Myabe divide here by batch size??
+    dLCE = ((tf.reduce_sum(tf.multiply(example_emb, true_w_syn), 1) + true_b_syn) / opts.sym_num - \
+            (tf.reduce_sum(tf.multiply(example_emb, true_w_ant), 1) + true_b_ant) / opts.ant_num) / opts.batch_size
+    # =======dLCE Addition======
 
     # True logits: [batch_size, 1]
-    true_logits = tf.reduce_sum(tf.multiply(example_emb, true_w), 1) + true_b #\
-      # + tf.reduce_sum(tf.multiply(example_emb, true_w_syn), 1) + true_b_syn \
-      # - tf.reduce_sum(tf.multiply(example_emb, true_w_ant), 1) + true_b_ant
-
+    true_logits = tf.reduce_sum(tf.multiply(example_emb, true_w), 1) + true_b
 
     sampled_syns = tf.gather(syn_table, sampled_ids)
     sampled_ants = tf.gather(ant_table, sampled_ids)
@@ -318,7 +330,7 @@ class Word2Vec(object):
     sampled_logits = tf.matmul(example_emb,
                                sampled_w,
                                transpose_b=True) + sampled_b_vec
-    return true_logits, sampled_logits
+    return true_logits, sampled_logits, dLCE
 
   def optimize(self, loss):
     """Build the graph to optimize the loss function."""
@@ -417,8 +429,9 @@ class Word2Vec(object):
       self._word2id[w] = i
     self.temp_output1 = examples
     self.temp_output = labels
-    true_logits, sampled_logits = self.forward(examples, labels)
-    loss = self.nce_loss(true_logits, sampled_logits)
+    true_logits, sampled_logits, dLCE = self.forward(examples, labels)
+    # Added dLCE value to compare with sampled logits - represents syn/ant relationships
+    loss = self.nce_loss(true_logits + dLCE, sampled_logits)
     tf.summary.scalar("NCE loss", loss)
     self._loss = loss
     self.optimize(loss)
@@ -460,7 +473,11 @@ class Word2Vec(object):
       _, epoch = self._session.run([self._train, self._epoch])
       if not self._printed:
         self._printed = True
-        print(self._session.run([self.temp_output1, self.temp_output]))
+        # print(self._session.run([self.temp_output1, self.temp_output]))
+        a, b = self._session.run([self.temp_output1, self.temp_output])
+        print([self.word_id[x] for x in a])
+        print([self.word_id[x] for x in b])
+
       if epoch != initial_epoch:
         break
 
