@@ -292,40 +292,28 @@ class Word2Vec(object):
     # Biases for labels: [batch_size, 1]
     true_b = tf.nn.embedding_lookup(sm_b, labels)
 
-    # Weights for sampled ids: [num_sampled, emb_dim]
-    sampled_w = tf.nn.embedding_lookup(sm_w_t, sampled_ids)
-    # Biases for sampled ids: [num_sampled, 1]
-    sampled_b = tf.nn.embedding_lookup(sm_b, sampled_ids)
+    syn_table = tf.constant(list(OrderedDict(sorted(self.syns.items(), key=lambda t: t[0])).values()))
+    ant_table = tf.constant(list(OrderedDict(sorted(self.ants.items(), key=lambda t: t[0])).values()))
 
-    # TODO:
-    #   get examples_synonyms, examples_antonyms, sampled_synonyms, sampled_antonyms
-    #   extract true_w_syn, true_b_syn, sampled_w_syn, sampled_b_syn
-    #   extract true_w_ant, true_b_ant, sampled_w_ant, sampled_b_ant
-    #   update:
     examples_syns = tf.gather(syn_table, examples)
     labels_syns = self.get_labels(examples_syns, labels_table)
 
     examples_ants = tf.gather(ant_table, examples)
     labels_ants = self.get_labels(examples_ants, labels_table)
 
-    # TODO how to get labels of examples_syn/ant?
+    true_w_syn = tf.nn.embedding_lookup(sm_w_t, labels_syns)
+    true_w_ant = tf.nn.embedding_lookup(sm_w_t, labels_ants)
 
-    # true_w_syn =  = tf.nn.embedding_lookup(sm_w_t, examples_syns_labels)
-    # true_w_ant =  = tf.nn.embedding_lookup(sm_w_t, examples_ants_labels)
+    true_b_syn = tf.nn.embedding_lookup(sm_b, examples_syns)
+    true_b_ant = tf.nn.embedding_lookup(sm_b, examples_ants)
 
-    # true_b_syn = tf.nn.embedding_lookup(sm_b, examples_syns)
-    # true_b_ant = tf.nn.embedding_lookup(sm_b, examples_ants)
+    # Weights for sampled ids: [num_sampled, emb_dim]
+    sampled_w = tf.nn.embedding_lookup(sm_w_t, sampled_ids)
+    # Biases for sampled ids: [num_sampled, 1]
+    sampled_b = tf.nn.embedding_lookup(sm_b, sampled_ids)
 
     # True logits: [batch_size, 1]
-    true_logits = tf.reduce_sum(tf.multiply(example_emb, true_w), 1) + true_b #\
-      # + tf.reduce_sum(tf.multiply(example_emb, true_w_syn), 1) + true_b_syn \
-      # - tf.reduce_sum(tf.multiply(example_emb, true_w_ant), 1) + true_b_ant
-
-
-    sampled_syns = tf.gather(syn_table, sampled_ids)
-    sampled_ants = tf.gather(ant_table, sampled_ids)
-
-    # TODO same for sampled_logits but I don't know how to do reshape for sampled_b_vec right
+    true_logits = tf.reduce_sum(tf.multiply(example_emb, true_w), 1) + true_b
 
     # Sampled logits: [batch_size, num_sampled]
     # We replicate sampled noise labels for all examples in the batch
@@ -334,7 +322,11 @@ class Word2Vec(object):
     sampled_logits = tf.matmul(example_emb,
                                sampled_w,
                                transpose_b=True) + sampled_b_vec
-    return true_logits, sampled_logits
+
+    syn_logits = (tf.reduce_sum(tf.multiply(example_emb, true_w_syn), 1) + true_b_syn) / opts.sym_num
+    ant_logits = (tf.reduce_sum(tf.multiply(example_emb, true_w_ant), 1) + true_b_ant) / opts.ant_num
+
+    return true_logits, sampled_logits, syn_logits, ant_logits
 
   def get_labels(self, examples, labels_table):
     partial_labels_table = tf.gather(labels_table, examples)
