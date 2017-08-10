@@ -99,31 +99,36 @@ flags.DEFINE_integer("checkpoint_interval", 600,
 FLAGS = flags.FLAGS
 
 def parse_vocab_to_word_id(vocab_path):
-  word_id = {}
+  id_word = {}
   with open(vocab_path, 'r') as v:
     for i, l in enumerate(v.readlines()):
       if i == 0: continue
-      word_id[i] = l.split(' ')[0][2:-1]
-  return word_id
+      id_word[i] = l.split(' ')[0][2:-1]
+  return id_word
 
 
-def word_ids_to_dict(word_id, pickle_path):
-  id_word = {w: i for i, w in word_id.items()}
+def padded_word_dict_to_id_dict(word_id, pickle_path, pad):
+  id_dict = word_dict_to_id_dict(word_id, pickle_path)
 
-  word_id_d = {}
+  max_length = max(map(lambda x: len(x), id_dict.values()))
 
-  max_length = 0
+  for k, v in id_dict.items():
+    id_dict[k] += [pad] * (max_length - len(v))
+
+  return id_dict
+
+
+def word_dict_to_id_dict(id_word, pickle_path):
+  word_id = {w: i for i, w in id_word.items()}
+
+  id_dict = {}
+
   with open(pickle_path, 'rb') as f:
-    syns = pickle.load(f)
-    for w, ss in syns.items():
-      word_id_d[id_word[w]] = list(map(lambda s: id_word[s], ss))
-      if max_length < len(word_id_d[id_word[w]]):
-        max_length = len(word_id_d[id_word[w]])
+    d = pickle.load(f)
+    for w, ss in d.items():
+      id_dict[id_word[w]] = list(map(lambda s: id_word[s], ss))
 
-  for k, v in word_id_d.items():
-    word_id_d[k] += [0] * (max_length - len(v))  # FIXME everyone is a syn/ant of UNK
-
-  return word_id_d
+  return id_dict
 
 
 class Options(object):
@@ -197,8 +202,9 @@ class Word2Vec(object):
     self._word2id = {}
     self._id2word = []
     self.word_id = parse_vocab_to_word_id(os.path.join(options.vocabs_root, "vocab.txt"))
-    self.syns = word_ids_to_dict(self.word_id, os.path.join(options.vocabs_root, "vocab_syn.pickle"))
-    self.ants = word_ids_to_dict(self.word_id, os.path.join(options.vocabs_root, "vocab_ant.pickle"))
+    self.syns = padded_word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "vocab_syn.pickle"), 0)
+    self.ants = padded_word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "vocab_ant.pickle"), 0)
+    self.all_labels = padded_word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "all_labels.pickle"), 0)
     self.build_graph()
     self.build_eval_graph()
     self.save_vocab()
@@ -241,8 +247,15 @@ class Word2Vec(object):
         name="emb")
     self._emb = emb
 
+    # Synonyms: [vocab_size, opts.num_syns]
     syn_table = tf.constant(list(OrderedDict(sorted(self.syns.items(), key=lambda t: t[0])).values()))
+
+    # Antonyms: [vocab_size, opts.num_ants]
     ant_table = tf.constant(list(OrderedDict(sorted(self.ants.items(), key=lambda t: t[0])).values()))
+
+    # Contexts: [vocab_size, max_i(len(context(v_i)))]
+    # Note: short contexts are padded with -1 to the end
+    labels_table = tf.constant(list(OrderedDict(sorted(self.all_labels.items(), key=lambda t: t[0])).values()))
 
     # Softmax weight: [vocab_size, emb_dim]. Transposed.
     sm_w_t = tf.Variable(
@@ -290,7 +303,10 @@ class Word2Vec(object):
     #   extract true_w_ant, true_b_ant, sampled_w_ant, sampled_b_ant
     #   update:
     examples_syns = tf.gather(syn_table, examples)
+    labels_syns = self.get_labels(examples_syns, labels_table)
+
     examples_ants = tf.gather(ant_table, examples)
+    labels_ants = self.get_labels(examples_ants, labels_table)
 
     # TODO how to get labels of examples_syn/ant?
 
@@ -319,6 +335,13 @@ class Word2Vec(object):
                                sampled_w,
                                transpose_b=True) + sampled_b_vec
     return true_logits, sampled_logits
+
+  def get_labels(self, examples, labels_table):
+    partial_labels_table = tf.gather(labels_table, examples)
+    labels_idx = tf.multinomial(tf.ones_like(partial_labels_table), 1)
+    labels = tf.gather_nd(partial_labels_table,
+                               tf.concat(values=[tf.range(labels_idx.shape()[1]), labels_idx], axis=1))
+    return labels
 
   def optimize(self, loss):
     """Build the graph to optimize the loss function."""
@@ -460,7 +483,9 @@ class Word2Vec(object):
       _, epoch = self._session.run([self._train, self._epoch])
       if not self._printed:
         self._printed = True
-        print(self._session.run([self.temp_output1, self.temp_output]))
+        a, b = self._session.run([self.temp_output1, self.temp_output])
+        print([self.word_id[x] for x in a])
+        print([self.word_id[x] for x in b])
       if epoch != initial_epoch:
         break
 
