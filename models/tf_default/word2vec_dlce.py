@@ -50,6 +50,9 @@ flags = tf.app.flags
 
 flags.DEFINE_string("vocabs_root", "/cs/engproj/3deception/meaning/models_data/text1", "Directory to get vocabulary, synonyms and antonyms from.")
 
+flags.DEFINE_integer("syn_threshold", 5, "Minimal number of synonyms target word must have")
+flags.DEFINE_integer("ant_threshold", 5, "Minimal number of antonyms target word must have")
+
 flags.DEFINE_string("save_path", None, "Directory to write the model and "
                     "training summaries.")
 flags.DEFINE_string("train_data", None, "Training text file. "
@@ -98,12 +101,13 @@ flags.DEFINE_integer("checkpoint_interval", 600,
 
 FLAGS = flags.FLAGS
 
-def parse_vocab_to_word_id(vocab_path):
+def parse_vocab_to_id_word_dict(vocab_path, min_freq):
   id_word = {}
   with open(vocab_path, 'r') as v:
     for i, l in enumerate(v.readlines()):
-      if i == 0: continue
-      id_word[i] = l.split(' ')[0][2:-1]
+      w, freq = l.split(' ')
+      if int(freq) >= min_freq:
+        id_word[i] = w
   return id_word
 
 
@@ -126,7 +130,8 @@ def word_dict_to_id_dict(id_word, pickle_path):
   with open(pickle_path, 'rb') as f:
     d = pickle.load(f)
     for w, ss in d.items():
-      id_dict[word_id[w]] = list(map(lambda s: word_id[s], ss))
+      if w in word_id:
+        id_dict[word_id[w]] = list(map(lambda s: word_id[s], filter(lambda xs: xs in word_id, ss)))
 
   return id_dict
 
@@ -191,6 +196,8 @@ class Options(object):
     self.eval_data = FLAGS.eval_data
 
     self.vocabs_root = FLAGS.vocabs_root
+    self.syn_threshold = FLAGS.syn_threshold
+    self.ant_threshold = FLAGS.ant_threshold
 
 
 class Word2Vec(object):
@@ -201,10 +208,10 @@ class Word2Vec(object):
     self._session = session
     self._word2id = {}
     self._id2word = []
-    self.word_id = parse_vocab_to_word_id(os.path.join(options.vocabs_root, "vocab.txt"))
+    self.word_id = parse_vocab_to_id_word_dict(os.path.join(options.vocabs_root, "vocab.txt"), options.min_count)
     self.syns = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "syn.pickle"))
     self.ants = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "ant.pickle"))
-    self.contexts = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "contexts.pickle"))
+    self.contexts = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "context.pickle"))
     self.build_graph()
     self.build_eval_graph()
     self.save_vocab()
