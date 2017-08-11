@@ -1,5 +1,6 @@
 from nltk.corpus import wordnet as wn
 import os
+import numpy as np
 import sys
 import pickle
 
@@ -15,6 +16,8 @@ def get_syn(words):
                     sl.append(ll)
             synlist.append(sl)
         syns[w] = list(set(sum(synlist, [])))
+    vals = list(map(lambda x: len(x), syns.values()))
+    print("extracted synonyms, mean %s, median %s, max %s" % (np.mean(vals), np.median(vals), max(vals)))
     return syns
 
 
@@ -29,12 +32,14 @@ def get_ant(words):
                     ll = a.name()
                     if ll in words:
                         sl.append(ll)
-                    ant_syn = list(get_syn([ll]).values()[0])
+                    ant_syn = list(get_syn([ll]).values())[0]
                     for a_s in ant_syn:
                         if a_s in words:
                             sl.append(a_s)
             synlist.append(sl)
         ants[w] = list(set(sum(synlist, [])))
+    vals = list(map(lambda x: len(x), ants.values()))
+    print("extracted antonyms, mean %s, median %s, max %s" % (np.mean(vals), np.median(vals), max(vals)))
     return ants
 
 
