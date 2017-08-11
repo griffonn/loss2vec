@@ -107,8 +107,8 @@ def parse_vocab_to_word_id(vocab_path):
   return id_word
 
 
-def padded_word_dict_to_id_dict(word_id, pickle_path, pad):
-  id_dict = word_dict_to_id_dict(word_id, pickle_path)
+def padded_word_dict_to_id_dict(id_word, pickle_path, pad):
+  id_dict = word_dict_to_id_dict(id_word, pickle_path)
 
   max_length = max(map(lambda x: len(x), id_dict.values()))
 
@@ -202,9 +202,9 @@ class Word2Vec(object):
     self._word2id = {}
     self._id2word = []
     self.word_id = parse_vocab_to_word_id(os.path.join(options.vocabs_root, "vocab.txt"))
-    self.syns = padded_word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "vocab_syn.pickle"), 0)
-    self.ants = padded_word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "vocab_ant.pickle"), 0)
-    self.all_labels = padded_word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "all_labels.pickle"), 0)
+    self.syns = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "vocab_syn.pickle"), 0)
+    self.ants = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "vocab_ant.pickle"), 0)
+    self.all_labels = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "all_labels.pickle"), 0)
     self.build_graph()
     self.build_eval_graph()
     self.save_vocab()
