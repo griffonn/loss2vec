@@ -1,3 +1,4 @@
+
 from nltk.corpus import wordnet as wn
 import os
 import numpy as np
@@ -40,6 +41,8 @@ def get_ant(words, quiet=False):
                     if ll in words:
                         sl.append(ll)
                     ant_syn = list(get_syn([ll], True)[0].values())[0]
+                    if len(ant_syn) > 1:
+                        print(len(ant_syn))
                     for a_s in ant_syn:
                         if a_s in words:
                             sl.append(a_s)
@@ -77,7 +80,7 @@ def extract_labels(vocab, corpus_path, window_size):
 
 def build_vocab(text_fd, vocab_fd):
     nlp = spacy.load('en_core_web_md')
-    doc = nlp(text_fd.read())
+    doc = nlp(str(text_fd.read()))
     counts = doc.count_by(ORTH)
     print(len(counts), 'unique words in corpus')
     for word_id, count in sorted(counts.items(), reverse=True, key=lambda item: item[1]):
@@ -93,7 +96,7 @@ if __name__ == '__main__':
 
     vocab_name = 'vocab.txt'
     if not os.path.isfile(os.path.join(path_dir, vocab_name)):
-        with open(os.path.join(path_dir, vocab_name), 'w') as vocab_fd, open(path) as text_fd:
+        with open(os.path.join(path_dir, vocab_name), 'w') as vocab_fd, open(path, 'rb') as text_fd:
             build_vocab(text_fd, vocab_fd)
 
     with open(os.path.join(path_dir, vocab_name), 'r') as vocab_fd:

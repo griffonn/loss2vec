@@ -202,9 +202,9 @@ class Word2Vec(object):
     self._word2id = {}
     self._id2word = []
     self.word_id = parse_vocab_to_word_id(os.path.join(options.vocabs_root, "vocab.txt"))
-    self.syns = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "vocab_syn.pickle"), 0)
-    self.ants = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "vocab_ant.pickle"), 0)
-    self.all_labels = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "all_labels.pickle"), 0)
+    self.syns = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "syn.pickle"), 0)
+    self.ants = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "ant.pickle"), 0)
+    self.contexts = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "contexts.pickle"), 0)
     self.build_graph()
     self.build_eval_graph()
     self.save_vocab()
@@ -253,9 +253,9 @@ class Word2Vec(object):
     # Antonyms: [vocab_size, opts.num_ants]
     ant_table = tf.constant(list(OrderedDict(sorted(self.ants.items(), key=lambda t: t[0])).values()))
 
-    # Contexts: [vocab_size, max_i(len(context(v_i)))]
-    # Note: short contexts are padded with -1 to the end
-    labels_table = tf.constant(list(OrderedDict(sorted(self.all_labels.items(), key=lambda t: t[0])).values()))
+    # Contexts:
+    for word, labels in sorted(self.contexts.items(), key=lambda t: t[0]):
+      _ = tf.constant(labels, name=str(word)+'_ctx_')
 
     # Softmax weight: [vocab_size, emb_dim]. Transposed.
     sm_w_t = tf.Variable(
@@ -296,10 +296,10 @@ class Word2Vec(object):
     ant_table = tf.constant(list(OrderedDict(sorted(self.ants.items(), key=lambda t: t[0])).values()))
 
     examples_syns = tf.gather(syn_table, examples)
-    labels_syns = self.get_labels(examples_syns, labels_table)
+    labels_syns = self.get_labels(examples_syns)
 
     examples_ants = tf.gather(ant_table, examples)
-    labels_ants = self.get_labels(examples_ants, labels_table)
+    labels_ants = self.get_labels(examples_ants)
 
     true_w_syn = tf.nn.embedding_lookup(sm_w_t, labels_syns)
     true_w_ant = tf.nn.embedding_lookup(sm_w_t, labels_ants)
@@ -328,11 +328,13 @@ class Word2Vec(object):
 
     return true_logits, sampled_logits, syn_logits, ant_logits
 
-  def get_labels(self, examples, labels_table):
-    partial_labels_table = tf.gather(labels_table, examples)
-    labels_idx = tf.multinomial(tf.ones_like(partial_labels_table), 1)
-    labels = tf.gather_nd(partial_labels_table,
-                               tf.concat(values=[tf.range(labels_idx.shape()[1]), labels_idx], axis=1))
+  def get_labels(self, examples):
+    labels = []
+    for example in examples:
+      example_labels = tf.get_variable(str(example)+'_ctx_')
+      label_idx = tf.multinomial(tf.ones_like(example_labels), 1)
+      label = example_labels[label_idx]
+      labels.append(label)
     return labels
 
   def optimize(self, loss):
@@ -432,8 +434,8 @@ class Word2Vec(object):
       self._word2id[w] = i
     self.temp_output1 = examples
     self.temp_output = labels
-    true_logits, sampled_logits = self.forward(examples, labels)
-    loss = self.nce_loss(true_logits, sampled_logits)
+    true_logits, sampled_logits, syn_logits, ant_logits = self.forward(examples, labels)
+    loss = self.nce_loss(true_logits, sampled_logits, syn_logits, ant_logits)
     tf.summary.scalar("NCE loss", loss)
     self._loss = loss
     self.optimize(loss)
@@ -452,7 +454,7 @@ class Word2Vec(object):
         f.write("%s %d\n" % (vocab_word,
                              opts.vocab_counts[i]))
 
-  def nce_loss(self, true_logits, sampled_logits):
+  def nce_loss(self, true_logits, sampled_logits, syn_logits, ant_logits):
     """Build the graph for the NCE loss."""
 
     # cross-entropy(logits, labels)
