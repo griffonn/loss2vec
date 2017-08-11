@@ -267,8 +267,7 @@ class Word2Vec(object):
     ant_table = tf.constant(list(OrderedDict(sorted(ants, key=lambda t: t[0])).values()))
 
     # Contexts:
-    for word, word_labels in sorted(self.contexts.items(), key=lambda t: t[0]):
-      _ = tf.constant(word_labels, name=str(word)+'_ctx_')
+    context_table = tf.constant(list(OrderedDict(sorted(self.contexts.items(), key=lambda t: t[0])).values()))
 
     # Softmax weight: [vocab_size, emb_dim]. Transposed.
     sm_w_t = tf.Variable(
@@ -306,10 +305,10 @@ class Word2Vec(object):
     true_b = tf.nn.embedding_lookup(sm_b, labels)
 
     examples_syns = tf.gather(syn_table, examples)
-    labels_syns = self.get_labels(examples_syns)
+    labels_syns = self.get_labels(examples_syns, context_table)
 
     examples_ants = tf.gather(ant_table, examples)
-    labels_ants = self.get_labels(examples_ants)
+    labels_ants = self.get_labels(examples_ants, context_table)
 
     true_w_syn = tf.nn.embedding_lookup(sm_w_t, labels_syns)
     true_w_ant = tf.nn.embedding_lookup(sm_w_t, labels_ants)
@@ -338,10 +337,12 @@ class Word2Vec(object):
 
     return true_logits, sampled_logits, syn_logits, ant_logits
 
-  def get_labels(self, examples):
-    labels_idx = tf.map_fn(lambda x: tf.multinomial(tf.ones_like(tf.get_variable(str(self._session.run([x])[0])+'_ctx_')), 1), examples)
-    self.temp_output = labels_idx
-    return labels_idx
+  def get_labels(self, examples, context_table):
+    partial_labels_table = tf.gather(context_table, examples)
+    labels_idx = tf.multinomial(tf.ones_like(partial_labels_table), 1)
+    labels = tf.gather_nd(partial_labels_table,
+                          tf.concat(values=[tf.range(labels_idx.shape()[1]), labels_idx], axis=1))
+    return labels
 
 
   def optimize(self, loss):
