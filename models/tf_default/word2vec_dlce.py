@@ -211,7 +211,11 @@ class Word2Vec(object):
     self.word_id = parse_vocab_to_id_word_dict(os.path.join(options.vocabs_root, "vocab.txt"), options.min_count)
     self.syns = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "syn.pickle"))
     self.ants = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "ant.pickle"))
-    self.contexts = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "context.pickle"))
+    contexts = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "context.pickle"))
+    self.contexts = {}
+    for k, v in contexts.items():
+      if k in self.syns and k in self.ants and len(self.syns[k]) >= options.syn_threshold and len(self.ants[k]) >= options.ant_threshold:
+        self.contexts[k] = v
     self.build_graph()
     self.build_eval_graph()
     self.save_vocab()
@@ -263,8 +267,8 @@ class Word2Vec(object):
     ant_table = tf.constant(list(OrderedDict(sorted(ants, key=lambda t: t[0])).values()))
 
     # Contexts:
-    for word, labels in sorted(self.contexts.items(), key=lambda t: t[0]):
-      _ = tf.constant(labels, name=str(word)+'_ctx_')
+    for word, word_labels in sorted(self.contexts.items(), key=lambda t: t[0]):
+      _ = tf.constant(word_labels, name=str(word)+'_ctx_')
 
     # Softmax weight: [vocab_size, emb_dim]. Transposed.
     sm_w_t = tf.Variable(
@@ -335,13 +339,10 @@ class Word2Vec(object):
     return true_logits, sampled_logits, syn_logits, ant_logits
 
   def get_labels(self, examples):
-    labels = []
-    for example in examples:
-      example_labels = tf.get_variable(str(example)+'_ctx_')
-      label_idx = tf.multinomial(tf.ones_like(example_labels), 1)
-      label = example_labels[label_idx]
-      labels.append(label)
-    return labels
+    labels_idx = tf.map_fn(lambda x: tf.multinomial(tf.ones_like(tf.get_variable(str(self._session.run([x])[0])+'_ctx_')), 1), examples)
+    self.temp_output = labels_idx
+    return labels_idx
+
 
   def optimize(self, loss):
     """Build the graph to optimize the loss function."""
