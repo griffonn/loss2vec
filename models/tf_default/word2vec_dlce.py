@@ -202,9 +202,9 @@ class Word2Vec(object):
     self._word2id = {}
     self._id2word = []
     self.word_id = parse_vocab_to_word_id(os.path.join(options.vocabs_root, "vocab.txt"))
-    self.syns = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "syn.pickle"), 0)
-    self.ants = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "ant.pickle"), 0)
-    self.contexts = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "contexts.pickle"), 0)
+    self.syns = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "syn.pickle"))
+    self.ants = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "ant.pickle"))
+    self.contexts = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "contexts.pickle"))
     self.build_graph()
     self.build_eval_graph()
     self.save_vocab()
@@ -248,10 +248,12 @@ class Word2Vec(object):
     self._emb = emb
 
     # Synonyms: [vocab_size, opts.num_syns]
-    syn_table = tf.constant(list(OrderedDict(sorted(self.syns.items(), key=lambda t: t[0])).values()))
+    syns = filter(lambda p: len(p[1]) == opts.syn_threshold, self.syns.items())
+    syn_table = tf.constant(list(OrderedDict(sorted(syns, key=lambda t: t[0])).values()))
 
     # Antonyms: [vocab_size, opts.num_ants]
-    ant_table = tf.constant(list(OrderedDict(sorted(self.ants.items(), key=lambda t: t[0])).values()))
+    ants = filter(lambda p: len(p[1]) == opts.ant_threshold, self.ants.items())
+    ant_table = tf.constant(list(OrderedDict(sorted(ants, key=lambda t: t[0])).values()))
 
     # Contexts:
     for word, labels in sorted(self.contexts.items(), key=lambda t: t[0]):
@@ -291,9 +293,6 @@ class Word2Vec(object):
     true_w = tf.nn.embedding_lookup(sm_w_t, labels)
     # Biases for labels: [batch_size, 1]
     true_b = tf.nn.embedding_lookup(sm_b, labels)
-
-    syn_table = tf.constant(list(OrderedDict(sorted(self.syns.items(), key=lambda t: t[0])).values()))
-    ant_table = tf.constant(list(OrderedDict(sorted(self.ants.items(), key=lambda t: t[0])).values()))
 
     examples_syns = tf.gather(syn_table, examples)
     labels_syns = self.get_labels(examples_syns)
