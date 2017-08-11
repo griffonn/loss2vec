@@ -124,5 +124,5 @@ if __name__ == '__main__':
 
     # for pair in product(range(max_ants, max_syns)):
     #     print(pair)
-    # with open(os.path.join(path_dir, 'context.pickle'), 'wb') as f:
-    #     pickle.dump(extract_labels(words, path, 5), f)
+    with open(os.path.join(path_dir, 'context.pickle'), 'wb') as f:
+        pickle.dump(extract_labels(words, path, 5), f)
