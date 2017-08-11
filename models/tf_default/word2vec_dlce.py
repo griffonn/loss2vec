@@ -213,9 +213,10 @@ class Word2Vec(object):
     self.ants = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "ant.pickle"))
     contexts = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "context.pickle"))
     self.contexts = {}
+    max_length = max(map(lambda x: len(x), contexts.values()))
     for k, v in contexts.items():
       if k in self.syns and k in self.ants and len(self.syns[k]) >= options.syn_threshold and len(self.ants[k]) >= options.ant_threshold:
-        self.contexts[k] = v
+        self.contexts[k] = v + [-1] * (max_length - len(v))
     self.build_graph()
     self.build_eval_graph()
     self.save_vocab()
@@ -267,7 +268,7 @@ class Word2Vec(object):
     ant_table = tf.constant(list(OrderedDict(sorted(ants, key=lambda t: t[0])).values()))
 
     # Contexts:
-    context_table = tf.constant(list(OrderedDict(sorted(self.contexts.items(), key=lambda t: t[0])).values()))
+    context_table = tf.constant(list(map(lambda x: x[1], sorted(self.contexts.items(), key=lambda t: t[0]))))
 
     # Softmax weight: [vocab_size, emb_dim]. Transposed.
     sm_w_t = tf.Variable(
@@ -332,16 +333,22 @@ class Word2Vec(object):
                                sampled_w,
                                transpose_b=True) + sampled_b_vec
 
-    syn_logits = (tf.reduce_sum(tf.multiply(example_emb, true_w_syn), 1) + true_b_syn) / opts.sym_num
-    ant_logits = (tf.reduce_sum(tf.multiply(example_emb, true_w_ant), 1) + true_b_ant) / opts.ant_num
+    syn_logits = (tf.reduce_sum(tf.multiply(example_emb, true_w_syn), 1) + true_b_syn) / opts.syn_threshold
+    ant_logits = (tf.reduce_sum(tf.multiply(example_emb, true_w_ant), 1) + true_b_ant) / opts.ant_threshold
 
     return true_logits, sampled_logits, syn_logits, ant_logits
 
   def get_labels(self, examples, context_table):
     partial_labels_table = tf.gather(context_table, examples)
-    labels_idx = tf.multinomial(tf.ones_like(partial_labels_table), 1)
+    labels_idx = tf.multinomial(tf.ones_like(partial_labels_table, dtype='float'), 1)
     labels = tf.gather_nd(partial_labels_table,
-                          tf.concat(values=[tf.range(labels_idx.shape()[1]), labels_idx], axis=1))
+                          tf.concat(values=[
+                            tf.reshape(
+                              tf.range(labels_idx.shape[1], dtype='int64'),
+                              [-1, 1]
+                            ), labels_idx
+                          ], axis=1)
+                         )
     return labels
 
 
@@ -486,8 +493,8 @@ class Word2Vec(object):
       if not self._printed:
         self._printed = True
         a, b = self._session.run([self.temp_output1, self.temp_output])
-        print([self.word_id[x] for x in a])
-        print([self.word_id[x] for x in b])
+        # print([self.word_id[x] for x in a])
+        # print([self.word_id[x] for x in b])
       if epoch != initial_epoch:
         break
 
