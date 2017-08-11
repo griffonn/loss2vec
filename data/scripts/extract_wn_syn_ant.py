@@ -29,6 +29,10 @@ def get_ant(words):
                     ll = a.name()
                     if ll in words:
                         sl.append(ll)
+                    ant_syn = list(get_syn([ll]).values()[0])
+                    for a_s in ant_syn:
+                        if a_s in words:
+                            sl.append(a_s)
             synlist.append(sl)
         ants[w] = list(set(sum(synlist, [])))
     return ants
