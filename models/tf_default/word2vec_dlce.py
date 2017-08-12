@@ -226,6 +226,7 @@ class Word2Vec(object):
     self._session = session
     self._word2id = {}
     self._id2word = []
+    self.temp_output = []
     self.word_id = parse_vocab_to_id_word_dict(os.path.join(options.vocabs_root, "vocab.txt"), options.min_count)
     self.syns = pad_id_dict(cut_id_dict(word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "syn.pickle")), options.num_syns), -1)
     self.ants = pad_id_dict(cut_id_dict(word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "ant.pickle")), options.num_ants), -1)
@@ -278,7 +279,7 @@ class Word2Vec(object):
     # Antonyms: [vocab_size, opts.num_ants]
     ant_table = tf.constant(list(OrderedDict(sorted(self.ants.items(), key=lambda t: t[0])).values()))
 
-    # Contexts:
+    # Contexts: [vocab_size, opts.num_ctx]
     ctx_table = tf.constant(list(OrderedDict(sorted(self.contexts.items(), key=lambda t: t[0])).values()))
 
     # Softmax weight: [vocab_size, emb_dim]. Transposed.
@@ -315,20 +316,23 @@ class Word2Vec(object):
     true_w = tf.nn.embedding_lookup(sm_w_t, labels)
     # Biases for labels: [batch_size, 1]
     true_b = tf.nn.embedding_lookup(sm_b, labels)
+    self.temp_output.extend([tf.Variable("Examples"), examples])
 
-    examples_syns_with_missing = tf.reshape(tf.gather(syn_table, examples), [-1, 1])
-    examples_syns = tf.boolean_mask(examples_syns_with_missing, tf.greater(examples_syns_with_missing, -1))
-    labels_syns = self.get_labels(examples_syns, ctx_table)
+    examples_syns = self.get_nonyms(examples, syn_table)
+    self.temp_output.extend([tf.Variable("Synonyms"), examples_syns])
 
-    examples_ants_with_missing = tf.reshape(tf.gather(ant_table, examples), [-1, 1])
-    examples_ants = tf.boolean_mask(examples_ants_with_missing, tf.greater(examples_ants_with_missing, -1))
-    labels_ants = self.get_labels(examples_ants, ctx_table)
+    syn_logits = tf.where(tf.shape(examples_syns) < 1,
+                   self.get_logits(ctx_table, example_emb, examples_syns, opts.num_syns, sm_b, sm_w_t),
+                   tf.zeros_like(examples_syns, dtype='float')
+    )
 
-    true_w_syn = tf.nn.embedding_lookup(sm_w_t, labels_syns)
-    true_w_ant = tf.nn.embedding_lookup(sm_w_t, labels_ants)
+    examples_ants = self.get_nonyms(examples, ant_table)
+    self.temp_output.extend([tf.Variable("Antonyms"), examples_ants])
 
-    true_b_syn = tf.nn.embedding_lookup(sm_b, examples_syns)
-    true_b_ant = tf.nn.embedding_lookup(sm_b, examples_ants)
+    ant_logits = tf.where(tf.shape(examples_ants) < 1,
+                   self.get_logits(ctx_table, example_emb, examples_ants, opts.num_ants, sm_b, sm_w_t),
+                   tf.zeros_like(examples_ants, dtype='float')
+    )
 
     # Weights for sampled ids: [num_sampled, emb_dim]
     sampled_w = tf.nn.embedding_lookup(sm_w_t, sampled_ids)
@@ -346,25 +350,30 @@ class Word2Vec(object):
                                sampled_w,
                                transpose_b=True) + sampled_b_vec
 
-    syn_logits = (tf.reduce_sum(tf.multiply(example_emb, true_w_syn), 1) + true_b_syn) / opts.syn_threshold
-    ant_logits = (tf.reduce_sum(tf.multiply(example_emb, true_w_ant), 1) + true_b_ant) / opts.ant_threshold
-
     return true_logits, sampled_logits, syn_logits, ant_logits
+
+  def get_logits(self, ctx_table, example_emb, examples, num, sm_b, sm_w_t):
+    labels = self.get_labels(examples, ctx_table)
+    self.temp_output.extend([tf.Variable("-- Labels"), labels])
+    true_w = tf.nn.embedding_lookup(sm_w_t, labels)
+    true_b = tf.nn.embedding_lookup(sm_b, examples)
+    logits = (tf.reduce_sum(tf.multiply(example_emb, true_w), 1) + true_b) / num
+    return logits
+
+  def get_nonyms(self, examples, table):
+    examples_with_missing = tf.reshape(tf.gather(table, examples), [-1, 1])
+    return tf.boolean_mask(examples_with_missing, tf.greater(examples_with_missing, -1))
 
   def get_labels(self, examples, ctx_table):
     partial_labels_table = tf.gather(ctx_table, examples)
-    self.temp_output = partial_labels_table
-    # labels_idx = tf.multinomial(tf.ones_like(partial_labels_table, dtype='float'), 1)
-    # labels = tf.gather_nd(partial_labels_table,
-    #                       tf.concat(values=[
-    #                         tf.reshape(
-    #                           tf.range(labels_idx.shape[1], dtype='int64'),
-    #                           [-1, 1]
-    #                         ), labels_idx
-    #                       ], axis=1)
-    #                       )
-    return tf.ones_like(examples)
-    # return labels
+    labels_idx = tf.multinomial(tf.ones_like(partial_labels_table, dtype='float'), 1)
+    labels = tf.gather_nd(partial_labels_table,
+                          tf.concat(values=[
+                            tf.cast(tf.reshape(tf.range(tf.shape(labels_idx)[0]), [-1, 1]), tf.int64),
+                            labels_idx
+                          ], axis=1)
+                          )
+    return labels
 
   def optimize(self, loss):
     """Build the graph to optimize the loss function."""
@@ -461,8 +470,7 @@ class Word2Vec(object):
 
     for i, w in enumerate(self._id2word):
       self._word2id[w] = i
-    self.temp_output1 = examples
-    self.temp_output = labels
+
     true_logits, sampled_logits, syn_logits, ant_logits = self.forward(examples, labels)
     loss = self.nce_loss(true_logits, sampled_logits, syn_logits, ant_logits)
     tf.summary.scalar("NCE loss", loss)
@@ -504,11 +512,16 @@ class Word2Vec(object):
     self._printed = False
     while True:
       _, epoch = self._session.run([self._train, self._epoch])
-      if not self._printed:
-        self._printed = True
-        a, b = self._session.run([self.temp_output1, self.temp_output])
-        # print([self.word_id[x] for x in a])
-        # print([self.word_id[x] for x in b])
+      # if not self._printed:
+      #   self._printed = True
+      #   a = self._session.run(self.temp_output)
+      #   for x in a:
+      #     if type(x) == bytes:
+      #       print(x)
+      #     else:
+      #       print(' '.join([self.word_id[w] if w in self.word_id else w for w in x]))
+      #
+      #     print()
       if epoch != initial_epoch:
         break
 
