@@ -40,6 +40,7 @@ import pickle
 from collections import OrderedDict
 
 from six.moves import xrange  # pylint: disable=redefined-builtin
+import random
 
 import numpy as np
 import tensorflow as tf
@@ -51,7 +52,12 @@ flags = tf.app.flags
 flags.DEFINE_string("vocabs_root", "/cs/engproj/3deception/meaning/models_data/text1", "Directory to get vocabulary, synonyms and antonyms from.")
 
 flags.DEFINE_integer("syn_threshold", 5, "Minimal number of synonyms target word must have")
+flags.DEFINE_integer("num_syns", 5, "How many synonyms to use")
+
 flags.DEFINE_integer("ant_threshold", 5, "Minimal number of antonyms target word must have")
+flags.DEFINE_integer("num_ants", 5, "How many antonyms to use")
+
+flags.DEFINE_integer("num_ctx", 80, "How many context words to use")
 
 flags.DEFINE_string("save_path", None, "Directory to write the model and "
                     "training summaries.")
@@ -111,13 +117,19 @@ def parse_vocab_to_id_word_dict(vocab_path, min_freq):
   return id_word
 
 
-def padded_word_dict_to_id_dict(id_word, pickle_path, pad):
-  id_dict = word_dict_to_id_dict(id_word, pickle_path)
-
+def pad_id_dict(id_dict, pad):
   max_length = max(map(lambda x: len(x), id_dict.values()))
 
   for k, v in id_dict.items():
     id_dict[k] += [pad] * (max_length - len(v))
+
+  return id_dict
+
+
+def cut_id_dict(id_dict, cut):
+  for k, v in id_dict.items():
+    if len(v) > cut:
+      id_dict[k] = random.sample(v, cut)
 
   return id_dict
 
@@ -196,8 +208,14 @@ class Options(object):
     self.eval_data = FLAGS.eval_data
 
     self.vocabs_root = FLAGS.vocabs_root
+
     self.syn_threshold = FLAGS.syn_threshold
+    self.num_syns = FLAGS.num_syns
+
     self.ant_threshold = FLAGS.ant_threshold
+    self.num_ants = FLAGS.num_ants
+
+    self.num_ctx = FLAGS.num_ctx
 
 
 class Word2Vec(object):
@@ -209,14 +227,9 @@ class Word2Vec(object):
     self._word2id = {}
     self._id2word = []
     self.word_id = parse_vocab_to_id_word_dict(os.path.join(options.vocabs_root, "vocab.txt"), options.min_count)
-    self.syns = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "syn.pickle"))
-    self.ants = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "ant.pickle"))
-    contexts = word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "context.pickle"))
-    self.contexts = {}
-    max_length = max(map(lambda x: len(x), contexts.values()))
-    for k, v in contexts.items():
-      if k in self.syns and k in self.ants and len(self.syns[k]) >= options.syn_threshold and len(self.ants[k]) >= options.ant_threshold:
-        self.contexts[k] = v + [-1] * (max_length - len(v))
+    self.syns = pad_id_dict(cut_id_dict(word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "syn.pickle")), options.num_syns), -1)
+    self.ants = pad_id_dict(cut_id_dict(word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "ant.pickle")), options.num_ants), -1)
+    self.contexts = pad_id_dict(cut_id_dict(word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "context.pickle")), options.num_ctx), -1)
     self.build_graph()
     self.build_eval_graph()
     self.save_vocab()
@@ -260,15 +273,13 @@ class Word2Vec(object):
     self._emb = emb
 
     # Synonyms: [vocab_size, opts.num_syns]
-    syns = filter(lambda p: len(p[1]) == opts.syn_threshold, self.syns.items())
-    syn_table = tf.constant(list(OrderedDict(sorted(syns, key=lambda t: t[0])).values()))
+    syn_table = tf.constant(list(OrderedDict(sorted(self.syns.items(), key=lambda t: t[0])).values()))
 
     # Antonyms: [vocab_size, opts.num_ants]
-    ants = filter(lambda p: len(p[1]) == opts.ant_threshold, self.ants.items())
-    ant_table = tf.constant(list(OrderedDict(sorted(ants, key=lambda t: t[0])).values()))
+    ant_table = tf.constant(list(OrderedDict(sorted(self.ants.items(), key=lambda t: t[0])).values()))
 
     # Contexts:
-    context_table = tf.constant(list(map(lambda x: x[1], sorted(self.contexts.items(), key=lambda t: t[0]))))
+    ctx_table = tf.constant(list(OrderedDict(sorted(self.contexts.items(), key=lambda t: t[0])).values()))
 
     # Softmax weight: [vocab_size, emb_dim]. Transposed.
     sm_w_t = tf.Variable(
@@ -305,11 +316,13 @@ class Word2Vec(object):
     # Biases for labels: [batch_size, 1]
     true_b = tf.nn.embedding_lookup(sm_b, labels)
 
-    examples_syns = tf.gather(syn_table, examples)
-    labels_syns = self.get_labels(examples_syns, context_table)
+    examples_syns_with_missing = tf.reshape(tf.gather(syn_table, examples), [-1, 1])
+    examples_syns = tf.boolean_mask(examples_syns_with_missing, tf.greater(examples_syns_with_missing, -1))
+    labels_syns = self.get_labels(examples_syns, ctx_table)
 
-    examples_ants = tf.gather(ant_table, examples)
-    labels_ants = self.get_labels(examples_ants, context_table)
+    examples_ants_with_missing = tf.reshape(tf.gather(ant_table, examples), [-1, 1])
+    examples_ants = tf.boolean_mask(examples_ants_with_missing, tf.greater(examples_ants_with_missing, -1))
+    labels_ants = self.get_labels(examples_ants, ctx_table)
 
     true_w_syn = tf.nn.embedding_lookup(sm_w_t, labels_syns)
     true_w_ant = tf.nn.embedding_lookup(sm_w_t, labels_ants)
@@ -338,19 +351,20 @@ class Word2Vec(object):
 
     return true_logits, sampled_logits, syn_logits, ant_logits
 
-  def get_labels(self, examples, context_table):
-    partial_labels_table = tf.gather(context_table, examples)
-    labels_idx = tf.multinomial(tf.ones_like(partial_labels_table, dtype='float'), 1)
-    labels = tf.gather_nd(partial_labels_table,
-                          tf.concat(values=[
-                            tf.reshape(
-                              tf.range(labels_idx.shape[1], dtype='int64'),
-                              [-1, 1]
-                            ), labels_idx
-                          ], axis=1)
-                         )
-    return labels
-
+  def get_labels(self, examples, ctx_table):
+    partial_labels_table = tf.gather(ctx_table, examples)
+    self.temp_output = partial_labels_table
+    # labels_idx = tf.multinomial(tf.ones_like(partial_labels_table, dtype='float'), 1)
+    # labels = tf.gather_nd(partial_labels_table,
+    #                       tf.concat(values=[
+    #                         tf.reshape(
+    #                           tf.range(labels_idx.shape[1], dtype='int64'),
+    #                           [-1, 1]
+    #                         ), labels_idx
+    #                       ], axis=1)
+    #                       )
+    return tf.ones_like(examples)
+    # return labels
 
   def optimize(self, loss):
     """Build the graph to optimize the loss function."""
