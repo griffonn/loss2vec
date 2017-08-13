@@ -61,20 +61,46 @@ def read_vocab(vocab_fd):
 
 
 def get_context(text, i, window_size):
-    return text[i-window_size:i-1] + text[i+1:i+1+window_size]
+    return text[i-1-window_size:i-1].tolist() + text[i+1:i+1+window_size].tolist()
 
 
-def extract_labels(vocab, corpus_path, window_size):
-    with open(corpus_path, 'r') as c:
-        text = c.read().split(' ')
-        labels = {}
-        for i, word in enumerate(text):
-            if word in vocab:
-                if word not in labels:
-                    labels[word] = []
-                labels[word] += filter(lambda x: x in vocab, get_context(text, i, window_size))
-    vals = list(map(lambda x: len(x), labels.values()))
-    print("extracted contexts, mean %s, median %s, max %s" % (np.mean(vals), np.median(vals), max(vals)))
+def extract_labels(vocab, text_fd, window_size):
+    import time
+    start = time.time()
+    text = text_fd.read().split()
+
+    print('text length:', len(text))
+    print('vocab length:', len(vocab))
+
+    idword = {word: j for j, word in enumerate(vocab)}
+    idtext = list(map(lambda x: idword[x] if x in idword else -1, text))
+
+    print("creating array")
+    doc = np.array(list(zip([
+        idtext[:-10],
+        idtext[1:-9],
+        idtext[2:-8],
+        idtext[3:-7],
+        idtext[4:-6],
+        idtext[5:-5],
+        idtext[6:-4],
+        idtext[7:-3],
+        idtext[8:-2],
+        idtext[9:-1],
+        idtext[10:]
+    ]))).squeeze()
+
+    labels = {}
+
+    for j, word in enumerate(idword.values()):
+        if not j % 1000: print(j)
+        a = doc[:, np.where(doc[5, :] == word)[0]][[0,1,2,3,4,6,7,8,9,10], :]
+        labels[word] = a.reshape([1, a.shape[0] * a.shape[1]]).tolist()[0]
+
+    print(time.time() - start)
+
+    # vals = list(map(lambda x: len(x), labels.values()))
+    # print("extracted contexts, mean %s, median %s, max %s" % (np.mean(vals), np.median(vals), max(vals)))
     return labels
 
 
@@ -84,7 +110,8 @@ def build_vocab(text_fd, vocab_fd):
     counts = doc.count_by(ORTH)
     print(len(counts), 'unique words in corpus')
     for word_id, count in sorted(counts.items(), reverse=True, key=lambda item: item[1]):
-        vocab_fd.write(nlp.vocab.strings[word_id] + ' ' + str(count) + '\n')
+        if count >= 100:
+            vocab_fd.write(nlp.vocab.strings[word_id] + ' ' + str(count) + '\n')
 
 
 if __name__ == '__main__':
@@ -124,5 +151,5 @@ if __name__ == '__main__':
 
     # for pair in product(range(max_ants, max_syns)):
     #     print(pair)
-    with open(os.path.join(path_dir, 'context.pickle'), 'wb') as f:
-        pickle.dump(extract_labels(words, path, 5), f)
+    with open(os.path.join(path_dir, 'context.pickle'), 'wb') as f, open(path, 'r') as text_fd:
+        pickle.dump(extract_labels(words, text_fd, 5), f)

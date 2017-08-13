@@ -41,6 +41,7 @@ from collections import OrderedDict
 
 from six.moves import xrange  # pylint: disable=redefined-builtin
 import random
+import pandas as pd
 
 import numpy as np
 import tensorflow as tf
@@ -49,7 +50,7 @@ word2vec = tf.load_op_library(os.path.join(os.path.dirname(os.path.realpath(__fi
 
 flags = tf.app.flags
 
-flags.DEFINE_string("vocabs_root", "/cs/engproj/3deception/meaning/models_data/text1", "Directory to get vocabulary, synonyms and antonyms from.")
+flags.DEFINE_string("vocabs_root", None, "Directory to get vocabulary, synonyms and antonyms from.")
 
 flags.DEFINE_integer("syn_threshold", 5, "Minimal number of synonyms target word must have")
 flags.DEFINE_integer("num_syns", 5, "How many synonyms to use")
@@ -227,10 +228,23 @@ class Word2Vec(object):
     self._word2id = {}
     self._id2word = []
     self.temp_output = []
+    print('Parsing vocab ids')
     self.word_id = parse_vocab_to_id_word_dict(os.path.join(options.vocabs_root, "vocab.txt"), options.min_count)
+    print('Parsing syn ids')
     self.syns = pad_id_dict(cut_id_dict(word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "syn.pickle")), options.num_syns), -1)
+    print('Parsing ant ids')
     self.ants = pad_id_dict(cut_id_dict(word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "ant.pickle")), options.num_ants), -1)
-    self.contexts = pad_id_dict(cut_id_dict(word_dict_to_id_dict(self.word_id, os.path.join(options.vocabs_root, "context.pickle")), options.num_ctx), -1)
+    print('Parsing contexts')
+    with open(os.path.join(options.vocabs_root, "context.pickle"), 'rb') as ct:
+        self.contexts = pad_id_dict(cut_id_dict(pickle.load(ct), options.num_ctx), -1)
+    # print('Parsing lmi')
+    # if os.path.isfile(os.path.join(options.vocabs_root, "lmi.pickle")):
+    #     self.lmi_df = pd.read_pickle(os.path.join(options.vocabs_root, "lmi.pickle"))
+    # else:
+    #     lmi = lambda x: x.index.to_series().apply(lambda y: 1.0 * self.contexts[y].count(x.name) * pd.np.log2(self.contexts[y].count(x.name) / (len(self.contexts[y]) * len(self.contexts[x.name]))))
+    #     lmi_df = pd.DataFrame(columns=list(self.word_id.keys()), index=list(self.word_id.keys()))
+    #     self.lmi_df = lmi_df.apply(lmi, axis=1)
+    #     pd.to_pickle(self.lmi_df, os.path.join(options.vocabs_root, "lmi.pickle"))
     self.build_graph()
     self.build_eval_graph()
     self.save_vocab()
@@ -282,6 +296,9 @@ class Word2Vec(object):
     # Contexts: [vocab_size, opts.num_ctx]
     ctx_table = tf.constant(list(OrderedDict(sorted(self.contexts.items(), key=lambda t: t[0])).values()))
 
+    # LMI: [vocab_size, vocab_size]
+    # lmi_table = tf.constant(self.lmi_df.values)
+
     # Softmax weight: [vocab_size, emb_dim]. Transposed.
     sm_w_t = tf.Variable(
         tf.zeros([opts.vocab_size, opts.emb_dim]),
@@ -316,18 +333,24 @@ class Word2Vec(object):
     true_w = tf.nn.embedding_lookup(sm_w_t, labels)
     # Biases for labels: [batch_size, 1]
     true_b = tf.nn.embedding_lookup(sm_b, labels)
-    self.temp_output.extend([tf.Variable("Examples"), examples])
+    # self.temp_output.extend([tf.Variable("Examples"), examples])
 
+    # labels_plmi_syns = self.get_plmi(labels, lmi_table)
+
+    # examples_all_syns = self.get_nonyms(examples, syn_table)
     examples_syns = self.get_nonyms(examples, syn_table)
-    self.temp_output.extend([tf.Variable("Synonyms"), examples_syns])
+    # examples_syns = tf.sets.intersection(examples_all_syns, labels_plmi_syns)
+    # self.temp_output.extend([tf.Variable("Synonyms"), examples_syns])
 
     syn_logits = tf.where(tf.shape(examples_syns) < 1,
                    self.get_logits(ctx_table, example_emb, examples_syns, opts.num_syns, sm_b, sm_w_t),
                    tf.zeros_like(examples_syns, dtype='float')
     )
 
+    # examples_all_ants = self.get_nonyms(examples, ant_table)
     examples_ants = self.get_nonyms(examples, ant_table)
-    self.temp_output.extend([tf.Variable("Antonyms"), examples_ants])
+    # examples_ants = tf.sets.intersection(examples_all_ants, labels_plmi_syns)
+    # self.temp_output.extend([tf.Variable("Antonyms"), examples_ants])
 
     ant_logits = tf.where(tf.shape(examples_ants) < 1,
                    self.get_logits(ctx_table, example_emb, examples_ants, opts.num_ants, sm_b, sm_w_t),
@@ -363,6 +386,10 @@ class Word2Vec(object):
   def get_nonyms(self, examples, table):
     examples_with_missing = tf.reshape(tf.gather(table, examples), [-1, 1])
     return tf.boolean_mask(examples_with_missing, tf.greater(examples_with_missing, -1))
+
+  # def get_plmi(self, examples, table):
+  #   examples_with_negative = tf.reshape(tf.gather(table, examples), [-1, 1])
+  #   return tf.boolean_mask(examples_with_negative, tf.greater(examples_with_negative, 0))
 
   def get_labels(self, examples, ctx_table):
     partial_labels_table = tf.gather(ctx_table, examples)
