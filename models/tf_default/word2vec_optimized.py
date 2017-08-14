@@ -359,17 +359,20 @@ class Word2Vec(object):
     except AttributeError as e:
       raise AttributeError("Need to read analogy questions.")
 
+    good_idx = []
+
     start = 0
     while start < total:
       limit = start + 2500
       sub = self._analogy_questions[start:limit, :]
       idx = self._predict(sub)
       start = limit
-      for question in xrange(sub.shape[0]):
+      for i,question in enumerate(xrange(sub.shape[0])):
         for j in xrange(4):
           if idx[question, j] == sub[question, 3]:
             # Bingo! We predicted correctly. E.g., [italy, rome, france, paris].
             correct += 1
+            good_idx.append(i+(start-2500))
             break
           elif idx[question, j] in sub[question, :3]:
             # We need to skip words already in the question.
@@ -377,7 +380,7 @@ class Word2Vec(object):
           else:
             # The correct label is not the precision@1
             break
-    print()
+    print(good_idx)
     print("Eval %4d/%d accuracy = %4.1f%%" % (correct, total,
                                               correct * 100.0 / total))
 
