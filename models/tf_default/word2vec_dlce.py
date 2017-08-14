@@ -52,13 +52,13 @@ flags = tf.app.flags
 
 flags.DEFINE_string("vocabs_root", None, "Directory to get vocabulary, synonyms and antonyms from.")
 
-flags.DEFINE_integer("syn_threshold", 5, "Minimal number of synonyms target word must have")
-flags.DEFINE_integer("num_syns", 5, "How many synonyms to use")
+flags.DEFINE_integer("syn_threshold", 1, "Minimal number of synonyms target word must have")
+flags.DEFINE_integer("num_syns", 30, "How many synonyms to use")
 
-flags.DEFINE_integer("ant_threshold", 5, "Minimal number of antonyms target word must have")
+flags.DEFINE_integer("ant_threshold", 1, "Minimal number of antonyms target word must have")
 flags.DEFINE_integer("num_ants", 5, "How many antonyms to use")
 
-flags.DEFINE_integer("num_ctx", 80, "How many context words to use")
+flags.DEFINE_integer("num_ctx", 100000, "How many context words to use")
 
 flags.DEFINE_string("save_path", None, "Directory to write the model and "
                     "training summaries.")
@@ -237,14 +237,31 @@ class Word2Vec(object):
     print('Parsing contexts')
     with open(os.path.join(options.vocabs_root, "context.pickle"), 'rb') as ct:
         self.contexts = pad_id_dict(cut_id_dict(pickle.load(ct), options.num_ctx), -1)
-    # print('Parsing lmi')
-    # if os.path.isfile(os.path.join(options.vocabs_root, "lmi.pickle")):
-    #     self.lmi_df = pd.read_pickle(os.path.join(options.vocabs_root, "lmi.pickle"))
-    # else:
-    #     lmi = lambda x: x.index.to_series().apply(lambda y: 1.0 * self.contexts[y].count(x.name) * pd.np.log2(self.contexts[y].count(x.name) / (len(self.contexts[y]) * len(self.contexts[x.name]))))
-    #     lmi_df = pd.DataFrame(columns=list(self.word_id.keys()), index=list(self.word_id.keys()))
-    #     self.lmi_df = lmi_df.apply(lmi, axis=1)
-    #     pd.to_pickle(self.lmi_df, os.path.join(options.vocabs_root, "lmi.pickle"))
+    print('Parsing lmi')
+    if os.path.isfile(os.path.join(options.vocabs_root, "lmi.pickle")):
+        self.lmi = pd.read_pickle(os.path.join(options.vocabs_root, "lmi.pickle"))
+    else:
+        # lmi = lambda x: x.index.to_series().apply(lambda y: 1.0 * self.contexts[y].count(x.name) * pd.np.log2(self.contexts[y].count(x.name) / (len(self.contexts[y]) * len(self.contexts[x.name]))))
+        single_counts = pd.read_pickle(os.path.join(options.vocabs_root, "single_counts.pickle"))
+        # print(single_counts)
+        double_counts = pd.read_pickle(os.path.join(options.vocabs_root, "double_counts.pickle"))
+        # print(double_counts)
+        single_replicate = np.tile(single_counts.values, (double_counts.shape[1], 1))
+        # print(single_replicate)
+        
+        frac = np.divide(double_counts, np.multiply((single_replicate - double_counts), (single_replicate.T - double_counts)))
+        # print(frac)
+        log_frac = np.log2(frac)
+        # print(log_frac)
+
+        self.lmi = np.multiply(log_frac, double_counts)
+        self.lmi = np.nan_to_num(self.lmi)
+        # print(self.lmi.shape)
+        pd.to_pickle(pd.DataFrame(self.lmi), os.path.join(options.vocabs_root, "lmi.pickle"))
+
+    self.ctxss = np.array(list(map(lambda x: x[1], sorted(self.contexts.items(), key=lambda t: t[0]))))
+    self.Y_init = tf.placeholder(tf.int64, shape=self.ctxss.shape)
+    self.X_init = tf.placeholder(tf.float32, shape=self.lmi.shape)
     self.build_graph()
     self.build_eval_graph()
     self.save_vocab()
@@ -288,16 +305,16 @@ class Word2Vec(object):
     self._emb = emb
 
     # Synonyms: [vocab_size, opts.num_syns]
-    syn_table = tf.constant(list(OrderedDict(sorted(self.syns.items(), key=lambda t: t[0])).values()))
+    syn_table = tf.constant(np.array(list(map(lambda x: x[1], sorted(self.syns.items(), key=lambda t: t[0])))))
 
     # Antonyms: [vocab_size, opts.num_ants]
-    ant_table = tf.constant(list(OrderedDict(sorted(self.ants.items(), key=lambda t: t[0])).values()))
+    ant_table = tf.constant(np.array(list(map(lambda x: x[1], sorted(self.ants.items(), key=lambda t: t[0])))))
 
     # Contexts: [vocab_size, opts.num_ctx]
-    ctx_table = tf.constant(list(OrderedDict(sorted(self.contexts.items(), key=lambda t: t[0])).values()))
+    ctx_table = tf.Variable(self.Y_init)
 
     # LMI: [vocab_size, vocab_size]
-    # lmi_table = tf.constant(self.lmi_df.values)
+    lmi_table = tf.Variable(self.X_init)
 
     # Softmax weight: [vocab_size, emb_dim]. Transposed.
     sm_w_t = tf.Variable(
@@ -335,11 +352,11 @@ class Word2Vec(object):
     true_b = tf.nn.embedding_lookup(sm_b, labels)
     # self.temp_output.extend([tf.Variable("Examples"), examples])
 
-    # labels_plmi_syns = self.get_plmi(labels, lmi_table)
+    labels_plmi_syns = self.get_plmi(labels, lmi_table)
 
-    # examples_all_syns = self.get_nonyms(examples, syn_table)
+    examples_all_syns = self.get_nonyms(examples, syn_table)
     examples_syns = self.get_nonyms(examples, syn_table)
-    # examples_syns = tf.sets.intersection(examples_all_syns, labels_plmi_syns)
+    # examples_syns = tf.sets.set_intersection(examples_all_syns, labels_plmi_syns)
     # self.temp_output.extend([tf.Variable("Synonyms"), examples_syns])
 
     syn_logits = tf.where(tf.shape(examples_syns) < 1,
@@ -347,10 +364,10 @@ class Word2Vec(object):
                    tf.zeros_like(examples_syns, dtype='float')
     )
 
-    # examples_all_ants = self.get_nonyms(examples, ant_table)
+    examples_all_ants = self.get_nonyms(examples, ant_table)
+    # self.temp_output.extend([tf.Variable("Antonyms"), examples_all_ants])
     examples_ants = self.get_nonyms(examples, ant_table)
-    # examples_ants = tf.sets.intersection(examples_all_ants, labels_plmi_syns)
-    # self.temp_output.extend([tf.Variable("Antonyms"), examples_ants])
+    # examples_ants = tf.sets.set_intersection(examples_all_ants, labels_plmi_syns)
 
     ant_logits = tf.where(tf.shape(examples_ants) < 1,
                    self.get_logits(ctx_table, example_emb, examples_ants, opts.num_ants, sm_b, sm_w_t),
@@ -377,7 +394,7 @@ class Word2Vec(object):
 
   def get_logits(self, ctx_table, example_emb, examples, num, sm_b, sm_w_t):
     labels = self.get_labels(examples, ctx_table)
-    self.temp_output.extend([tf.Variable("-- Labels"), labels])
+    # self.temp_output.extend([tf.Variable("-- Labels"), labels])
     true_w = tf.nn.embedding_lookup(sm_w_t, labels)
     true_b = tf.nn.embedding_lookup(sm_b, examples)
     logits = (tf.reduce_sum(tf.multiply(example_emb, true_w), 1) + true_b) / num
@@ -387,9 +404,15 @@ class Word2Vec(object):
     examples_with_missing = tf.reshape(tf.gather(table, examples), [-1, 1])
     return tf.boolean_mask(examples_with_missing, tf.greater(examples_with_missing, -1))
 
-  # def get_plmi(self, examples, table):
-  #   examples_with_negative = tf.reshape(tf.gather(table, examples), [-1, 1])
-  #   return tf.boolean_mask(examples_with_negative, tf.greater(examples_with_negative, 0))
+  def get_plmi(self, examples, table):
+    # self.temp_output.extend([tf.Variable("-- examples"), examples])
+    # self.temp_output.extend([tf.Variable("-- PLMI table"), table])
+    examples_with_negative = tf.gather(table, examples)
+    # self.temp_output.extend([tf.Variable("-- labels PLMI"), examples_with_negative])
+    ret = tf.where(tf.greater(examples_with_negative, 0))
+    ret2 = tf.squeeze(tf.transpose(tf.gather(tf.transpose(ret), tf.constant([1]))))
+    # self.temp_output.extend([tf.Variable("-- labels pos PLMI"), ret2])
+    return ret2
 
   def get_labels(self, examples, ctx_table):
     partial_labels_table = tf.gather(ctx_table, examples)
@@ -483,7 +506,7 @@ class Word2Vec(object):
                                           min_count=opts.min_count,
                                           subsample=opts.subsample)
     (opts.vocab_words, opts.vocab_counts,
-     opts.words_per_epoch) = self._session.run([words, counts, words_per_epoch])
+     opts.words_per_epoch) = self._session.run([words, counts, words_per_epoch], feed_dict={self.X_init: self.lmi, self.Y_init: self.ctxss})
     opts.vocab_size = len(opts.vocab_words)
 
     print("Data file: ", opts.train_data)
@@ -505,7 +528,7 @@ class Word2Vec(object):
     self.optimize(loss)
 
     # Properly initialize all variables.
-    tf.global_variables_initializer().run()
+    tf.global_variables_initializer().run(feed_dict={self.X_init: self.lmi.values, self.Y_init: self.ctxss})
 
     self.saver = tf.train.Saver()
 
@@ -535,20 +558,16 @@ class Word2Vec(object):
     return nce_loss_tensor
 
   def _train_thread_body(self):
-    initial_epoch, = self._session.run([self._epoch])
+    initial_epoch, = self._session.run([self._epoch], feed_dict={self.X_init: self.lmi.values, self.Y_init: self.ctxss})
     self._printed = False
     while True:
-      _, epoch = self._session.run([self._train, self._epoch])
-      # if not self._printed:
-      #   self._printed = True
-      #   a = self._session.run(self.temp_output)
-      #   for x in a:
-      #     if type(x) == bytes:
-      #       print(x)
-      #     else:
-      #       print(' '.join([self.word_id[w] if w in self.word_id else w for w in x]))
-      #
-      #     print()
+      _, epoch = self._session.run([self._train, self._epoch], feed_dict={self.X_init: self.lmi.values, self.Y_init: self.ctxss})
+      if not self._printed:
+        self._printed = True
+        a = self._session.run(self.temp_output)
+        for x in a:
+          print(x)
+          # print(' '.join([self.word_id[w] if w in self.word_id else w for w in x]))
       if epoch != initial_epoch:
         break
 
@@ -556,7 +575,7 @@ class Word2Vec(object):
     """Train the model."""
     opts = self._options
 
-    initial_epoch, initial_words = self._session.run([self._epoch, self._words])
+    initial_epoch, initial_words = self._session.run([self._epoch, self._words], feed_dict={self.X_init: self.lmi.values, self.Y_init: self.ctxss})
 
     summary_op = tf.summary.merge_all()
     summary_writer = tf.summary.FileWriter(opts.save_path, self._session.graph)
@@ -571,7 +590,7 @@ class Word2Vec(object):
     while True:
       time.sleep(opts.statistics_interval)  # Reports our progress once a while.
       (epoch, step, loss, words, lr) = self._session.run(
-          [self._epoch, self.global_step, self._loss, self._words, self._lr])
+          [self._epoch, self.global_step, self._loss, self._words, self._lr], feed_dict={self.X_init: self.lmi, self.Y_init: self.ctxss})
       now = time.time()
       last_words, last_time, rate = words, now, (words - last_words) / (
           now - last_time)
@@ -579,7 +598,7 @@ class Word2Vec(object):
             (epoch, step, lr, loss, rate), end="")
       sys.stdout.flush()
       if now - last_summary_time > opts.summary_interval:
-        summary_str = self._session.run(summary_op)
+        summary_str = self._session.run(summary_op, feed_dict={self.X_init: self.lmi.values, self.Y_init: self.ctxss})
         summary_writer.add_summary(summary_str, step)
         last_summary_time = now
       if now - last_checkpoint_time > opts.checkpoint_interval:
@@ -601,7 +620,7 @@ class Word2Vec(object):
         self._analogy_a: analogy[:, 0],
         self._analogy_b: analogy[:, 1],
         self._analogy_c: analogy[:, 2]
-    })
+    }, feed_dict={self.X_init: self.lmi.values, self.Y_init: self.ctxss})
     return idx
 
   def eval(self):
@@ -651,7 +670,7 @@ class Word2Vec(object):
     """Prints out nearby words given a list of words."""
     ids = np.array([self._word2id.get(x, 0) for x in words])
     vals, idx = self._session.run(
-        [self._nearby_val, self._nearby_idx], {self._nearby_word: ids})
+        [self._nearby_val, self._nearby_idx], {self._nearby_word: ids, self.X_init: self.lmi.values, self.Y_init: self.ctxss})
     for i in xrange(len(words)):
       print("\n%s\n=====================================" % (words[i]))
       for (neighbor, distance) in zip(idx[i, :num], vals[i, :num]):
