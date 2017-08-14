@@ -52,13 +52,13 @@ flags = tf.app.flags
 
 flags.DEFINE_string("vocabs_root", None, "Directory to get vocabulary, synonyms and antonyms from.")
 
-flags.DEFINE_integer("syn_threshold", 5, "Minimal number of synonyms target word must have")
-flags.DEFINE_integer("num_syns", 5, "How many synonyms to use")
+flags.DEFINE_integer("syn_threshold", 3, "Minimal number of synonyms target word must have")
+flags.DEFINE_integer("num_syns", 10, "How many synonyms to use")
 
-flags.DEFINE_integer("ant_threshold", 5, "Minimal number of antonyms target word must have")
-flags.DEFINE_integer("num_ants", 5, "How many antonyms to use")
+flags.DEFINE_integer("ant_threshold", 1, "Minimal number of antonyms target word must have")
+flags.DEFINE_integer("num_ants", 3, "How many antonyms to use")
 
-flags.DEFINE_integer("num_ctx", 80, "How many context words to use")
+flags.DEFINE_integer("num_ctx", 1000, "How many context words to use")
 
 flags.DEFINE_string("save_path", None, "Directory to write the model and "
                     "training summaries.")
