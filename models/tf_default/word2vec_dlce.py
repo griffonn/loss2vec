@@ -50,7 +50,7 @@ word2vec = tf.load_op_library(os.path.join(os.path.dirname(os.path.realpath(__fi
 
 flags = tf.app.flags
 
-flags.DEFINE_string("vocabs_root", None, "Directory to get vocabulary, synonyms and antonyms from.")
+flags.DEFINE_string("vocabs_root", '/tmp/bnc', "Directory to get vocabulary, synonyms and antonyms from.")
 
 flags.DEFINE_integer("syn_threshold", 3, "Minimal number of synonyms target word must have")
 flags.DEFINE_integer("num_syns", 10, "How many synonyms to use")
@@ -112,9 +112,9 @@ def parse_vocab_to_id_word_dict(vocab_path, min_freq):
   id_word = {}
   with open(vocab_path, 'r') as v:
     for i, l in enumerate(v.readlines()):
-      w, freq = l.split(' ')
-      if int(freq) >= min_freq:
-        id_word[i] = w
+        w, freq = l.split(' ')
+        if int(freq) >= min_freq:
+            id_word[i] = w
   return id_word
 
 
