@@ -1,4 +1,3 @@
-
 from nltk.corpus import wordnet as wn
 import os
 import numpy as np
@@ -7,6 +6,7 @@ import pickle
 import spacy
 from spacy.attrs import ORTH
 from itertools import product
+from collections import Counter
 
 
 def get_syn(words, quiet=False):
@@ -105,13 +105,12 @@ def extract_labels(vocab, text_fd, window_size):
 
 
 def build_vocab(text_fd, vocab_fd):
-    nlp = spacy.load('en_core_web_md')
-    doc = nlp(str(text_fd.read()))
-    counts = doc.count_by(ORTH)
+    doc = text_fd.read().split()
+    counts = Counter(doc)
     print(len(counts), 'unique words in corpus')
-    for word_id, count in sorted(counts.items(), reverse=True, key=lambda item: item[1]):
-        if count >= 100:
-            vocab_fd.write(nlp.vocab.strings[word_id] + ' ' + str(count) + '\n')
+    for word_id in doc:
+        if counts[word_id] >= 100:
+            vocab_fd.write(word_id + ' ' + str(counts[word_id]) + '\n')
 
 
 if __name__ == '__main__':
@@ -123,7 +122,7 @@ if __name__ == '__main__':
 
     vocab_name = 'vocab.txt'
     if not os.path.isfile(os.path.join(path_dir, vocab_name)):
-        with open(os.path.join(path_dir, vocab_name), 'w') as vocab_fd, open(path, 'rb') as text_fd:
+        with open(os.path.join(path_dir, vocab_name), 'w') as vocab_fd, open(path, 'r') as text_fd:
             build_vocab(text_fd, vocab_fd)
 
     with open(os.path.join(path_dir, vocab_name), 'r') as vocab_fd:

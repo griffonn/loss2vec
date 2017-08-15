@@ -1,1 +1,1 @@
-python3 word2vec_dlce.py --train_data=/cs/engproj/3deception/meaning/models_data/text1/text1 --eval_data=../../data/test-antonyms.txt --save_path=/tmp/text1t --syn_threshold=10 --ant_threshold=2
+python3 word2vec_dlce.py --train_data=/path/to/corpus.txt --eval_data=/path/to/loss2vec/data/test-antonyms.txt --save_path=/path/to/save/tensorflow/model --syn_threshold=10 --ant_threshold=2 --vocabs_root=/path/to/syn/ant/count/context/pickles/folder
