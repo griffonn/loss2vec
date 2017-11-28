@@ -1,4 +1,3 @@
-from nltk.corpus import wordnet as wn
 import os
 import numpy as np
 import pandas as pd
